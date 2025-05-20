@@ -784,6 +784,10 @@ namespace System.Net.Sockets
                                             // "losing" the notification and causing the operation to pend indefinitely.
             private AsyncOperation? _tail;   // Queue of pending IO operations to process when data becomes available.
 
+#if TARGET_LIBNX
+            internal bool IsEmpty => _tail == null;
+#endif
+
             // The _queueLock is used to ensure atomic access to the queue state above.
             // The lock is only ever held briefly, to read and/or update queue state, and
             // never around any external call, e.g. OS call or user code invocation.
@@ -1262,6 +1266,10 @@ namespace System.Net.Sockets
         private SocketAsyncEngine? _asyncEngine;
         private bool IsRegistered => _asyncEngine != null;
         private bool _isHandleNonBlocking;
+
+#if TARGET_LIBNX
+        internal bool HasPendingWrites => !_sendQueue.IsEmpty;
+#endif
 
         private readonly object _registerLock = new object();
 

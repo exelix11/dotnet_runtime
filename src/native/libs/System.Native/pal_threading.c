@@ -22,6 +22,11 @@
 #endif
 #include <pthread.h>
 
+#if defined(TARGET_LIBNX)
+#define PTHREAD_STACK_MIN 0x1000
+#include <switch.h>
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // LowLevelMonitor - Represents a non-recursive mutex and condition
 
@@ -326,6 +331,8 @@ uint32_t SystemNative_TryGetUInt32OSThreadId(void)
     uint32_t threadId = (uint32_t)_lwp_self();
     assert(threadId != InvalidId);
     return threadId;
+#elif defined(TARGET_LIBNX)
+    return (uint32_t)threadGetCurHandle();
 #else
     return InvalidId;
 #endif

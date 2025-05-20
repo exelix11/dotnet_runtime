@@ -27,6 +27,9 @@
 #ifdef HAVE_SYS_SYSCTL_H
 #include <sys/sysctl.h>
 #endif
+#ifdef HOST_LIBNX
+#include <switch.h>
+#endif
 #endif
 
 int
@@ -37,6 +40,8 @@ mono_process_current_pid (void)
 #elif defined(HAVE_GETPID)
 	return (int) getpid ();
 #elif defined(HOST_WASI)
+	return 0;
+#elif defined(HOST_LIBNX)
 	return 0;
 #else
 #error getpid

@@ -41,7 +41,11 @@
 #if HAVE_SYS_SOCKIO_H
 #include <sys/sockio.h>
 #endif
+#if defined(TARGET_LIBNX)
+#define DISABLE_IPV6 1
+#else
 #include <sys/un.h>
+#endif
 #if defined(__APPLE__) && __APPLE__
 #include <sys/socketvar.h>
 #endif
@@ -643,6 +647,9 @@ int32_t SystemNative_GetDomainName(uint8_t* name, int32_t nameLength)
     // Copy the domain name
     SafeStringCopy((char*)name, namelen, uts.domainname);
     return 0;
+#elif TARGET_LIBNX
+    // On libnx, there's no getdomainname but we can use the host name from the socket
+    return SystemNative_GetHostName(name, nameLength);
 #else
     // GetDomainName is not supported on this platform.
     errno = ENOTSUP;
@@ -676,7 +683,12 @@ int32_t SystemNative_GetSocketAddressSizes(int32_t* ipv4SocketAddressSize, int32
 
     *ipv4SocketAddressSize = sizeof(struct sockaddr_in);
     *ipv6SocketAddressSize = sizeof(struct sockaddr_in6);
+    #if defined(TARGET_LIBNX)
+    // We don't support UDS on libnx, however 0 will trigger an assert in the managed code
+    *udsSocketAddressSize = sizeof(struct sockaddr_in);
+    #else
     *udsSocketAddressSize = sizeof(struct sockaddr_un);
+    #endif
     *maxSocketAddressSize = sizeof(struct sockaddr_storage);
     return Error_SUCCESS;
 }
@@ -881,6 +893,9 @@ int32_t SystemNative_GetIPv6Address(
 int32_t
 SystemNative_SetIPv6Address(uint8_t* socketAddress, int32_t socketAddressLen, uint8_t* address, int32_t addressLen, uint32_t scopeId)
 {
+#if DISABLE_IPV6
+    return Error_EAFNOSUPPORT;
+#else
     if (socketAddress == NULL || address == NULL || socketAddressLen < 0 ||
         (size_t)socketAddressLen < sizeof(struct sockaddr_in6) || addressLen < NUM_BYTES_IN_IPV6_ADDRESS)
     {
@@ -905,6 +920,7 @@ SystemNative_SetIPv6Address(uint8_t* socketAddress, int32_t socketAddressLen, ui
     inet6SockAddr->sin6_scope_id = scopeId;
 
     return Error_SUCCESS;
+#endif
 }
 
 static int8_t IsStreamSocket(int socket)
@@ -939,7 +955,16 @@ int32_t SystemNative_GetControlMessageBufferSize(int32_t isIPv4, int32_t isIPv6)
     // Note: it is possible that the address family of the socket is neither
     //       AF_INET nor AF_INET6. In this case both inputs will be 0 and
     //       the control message buffer size should be zero.
-    return (isIPv4 != 0 ? CMSG_SPACE(sizeof(struct in_pktinfo)) : 0) + (isIPv6 != 0 ? CMSG_SPACE(sizeof(struct in6_pktinfo)) : 0);
+    int32_t total = 0;
+    if (isIPv4 != 0)
+        total += CMSG_SPACE(sizeof(struct in_pktinfo));
+    
+#if !DISABLE_IPV6
+    if (isIPv6 != 0)
+        total += CMSG_SPACE(sizeof(struct in6_pktinfo));
+#endif 
+
+    return total;
 }
 
 static int32_t GetIPv4PacketInformation(struct cmsghdr* controlMessage, IPPacketInformation* packetInfo)
@@ -988,6 +1013,9 @@ static int32_t GetIPv6PacketInformation(struct cmsghdr* controlMessage, IPPacket
     assert(controlMessage != NULL);
     assert(packetInfo != NULL);
 
+#if DISABLE_IPV6
+    return 0;
+#else
     if (controlMessage->cmsg_len < sizeof(struct in6_pktinfo))
     {
         assert(false && "expected a control message large enough to hold an in6_pktinfo value");
@@ -1000,6 +1028,7 @@ static int32_t GetIPv6PacketInformation(struct cmsghdr* controlMessage, IPPacket
     packetInfo->InterfaceIndex = (int32_t)pktinfo->ipi6_ifindex;
 
     return 1;
+#endif
 }
 
 static struct cmsghdr* GET_CMSG_NXTHDR(struct msghdr* mhdr, struct cmsghdr* cmsg)
@@ -1046,6 +1075,9 @@ SystemNative_TryGetIPPacketInformation(MessageHeader* messageHeader, int32_t isI
     }
     else
     {
+#if DISABLE_IPV6
+        return 0;
+#else
         for (; controlMessage != NULL && controlMessage->cmsg_len > 0;
              controlMessage = GET_CMSG_NXTHDR(&header, controlMessage))
         {
@@ -1054,6 +1086,7 @@ SystemNative_TryGetIPPacketInformation(MessageHeader* messageHeader, int32_t isI
                 return GetIPv6PacketInformation(controlMessage, packetInfo);
             }
         }
+#endif
     }
 
     return 0;
@@ -1161,6 +1194,9 @@ int32_t SystemNative_GetIPv6MulticastOption(intptr_t socket, int32_t multicastOp
         return Error_EFAULT;
     }
 
+#if DISABLE_IPV6
+    return Error_EAFNOSUPPORT;
+#else
     int fd = ToFileDescriptor(socket);
 
     int optionName;
@@ -1180,6 +1216,7 @@ int32_t SystemNative_GetIPv6MulticastOption(intptr_t socket, int32_t multicastOp
     ConvertIn6AddrToByteArray(&option->Address.Address[0], NUM_BYTES_IN_IPV6_ADDRESS, &opt.ipv6mr_multiaddr);
     option->InterfaceIndex = (int32_t)opt.ipv6mr_interface;
     return Error_SUCCESS;
+#endif
 }
 
 int32_t SystemNative_SetIPv6MulticastOption(intptr_t socket, int32_t multicastOption, IPv6MulticastOption* option)
@@ -1189,6 +1226,9 @@ int32_t SystemNative_SetIPv6MulticastOption(intptr_t socket, int32_t multicastOp
         return Error_EFAULT;
     }
 
+#if DISABLE_IPV6
+    return Error_EAFNOSUPPORT;
+#else
     int fd = ToFileDescriptor(socket);
 
     int optionName;
@@ -1211,6 +1251,7 @@ int32_t SystemNative_SetIPv6MulticastOption(intptr_t socket, int32_t multicastOp
 
     int err = setsockopt(fd, IPPROTO_IPV6, optionName, &opt, sizeof(opt));
     return err == 0 ? Error_SUCCESS : SystemNative_ConvertErrorPlatformToPal(errno);
+#endif
 }
 
 #if defined(__APPLE__) && __APPLE__
@@ -1560,6 +1601,7 @@ int32_t SystemNative_SendMessage(intptr_t socket, MessageHeader* messageHeader, 
 #else
     while ((res = sendmsg(fd, &header, socketFlags)) < 0 && errno == EINTR);
 #endif
+
     if (res != -1)
     {
         *sent = res;
@@ -1958,6 +2000,9 @@ static bool TryGetPlatformSocketOption(int32_t socketOptionLevel, int32_t socket
             }
 
         case SocketOptionLevel_SOL_IPV6:
+        #if DISABLE_IPV6
+            return false;
+        #else
             *optLevel = IPPROTO_IPV6;
 
             switch (socketOptionName)
@@ -1994,7 +2039,7 @@ static bool TryGetPlatformSocketOption(int32_t socketOptionLevel, int32_t socket
                 default:
                     return false;
             }
-
+        #endif
         case SocketOptionLevel_SOL_TCP:
             *optLevel = IPPROTO_TCP;
 
@@ -3271,11 +3316,17 @@ void SystemNative_GetDomainSocketSizes(int32_t* pathOffset, int32_t* pathSize, i
     assert(pathSize != NULL);
     assert(addressSize != NULL);
 
+#if defined(TARGET_LIBNX)
+    *pathOffset = 0;
+    *pathSize = 0;
+    *addressSize = 0;
+#else
     struct sockaddr_un domainSocket;
 
     *pathOffset = offsetof(struct sockaddr_un, sun_path);
     *pathSize = sizeof(domainSocket.sun_path);
     *addressSize = sizeof(domainSocket);
+#endif
 }
 
 int32_t SystemNative_GetMaximumAddressSize(void)
@@ -3454,8 +3505,13 @@ error:
 
 uint32_t SystemNative_InterfaceNameToIndex(char* interfaceName)
 {
+#if TARGET_LIBNX
+    assert(interfaceName != NULL);
+    return Error_EINVAL;
+#else
     assert(interfaceName != NULL);
     if (interfaceName[0] == '%')
         interfaceName++;
     return if_nametoindex(interfaceName);
+#endif
 }
