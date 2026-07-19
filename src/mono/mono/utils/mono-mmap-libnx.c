@@ -32,7 +32,6 @@ static pthread_mutex_t page_table_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void mono_nx_fakemmap_release(void) {
 	if (heap_start) {
-		free(page_table);
 		page_table = NULL;
 		heap_start = 0;
 		total_pages = 0;
@@ -44,19 +43,33 @@ void mono_nx_fakemmap_init(intptr_t memory_start, intptr_t memory_end)
 {
 	mono_nx_fakemmap_release();
 
-	size_t memory_size = memory_end - memory_start;
-	memory_size = (memory_size / MMAP_PAGE_SIZE) * MMAP_PAGE_SIZE; // Round down to page size
-	g_assert(memory_size > 0);
+	g_assert(memory_start);
+	g_assert(memory_end);
+	g_assert(memory_end > memory_start);
 
-	heap_start = memory_start;
-	g_assert(heap_start);
+	// This function is meant to be called very early during startup and heap may not be ready.
+	// Take the memory we need for the page table from the end of the heap itself.
+	// We must not take it from the top because the top is aligned to the correct max alignment that is required by mono.
+	// First, approximate how big is the page table.
+	size_t tmp_heap_size = memory_end - memory_start;
+	size_t tmp_pages = tmp_heap_size / MMAP_PAGE_SIZE + 1; // Round up to page size
+	g_assert(tmp_pages > 0);
 
-	total_memory = memory_size;
-	total_pages = total_memory / MMAP_PAGE_SIZE;
-
-	size_t page_table_size = (total_pages + 7) / 8; // 1 bit per page, round up to nearest byte
-	page_table = (u8*)malloc(page_table_size);
+	size_t page_table_size = (tmp_pages + 7) / 8; // 1 bit per page, round up to nearest byte
+	page_table = (u8*)(memory_end - page_table_size);
 	memset(page_table, 0, page_table_size);
+
+	memory_end -= page_table_size;
+	heap_start = memory_start;
+
+	// The actual amount of pages will be smaller, calculate it here
+	total_memory = (memory_end - memory_start) / MMAP_PAGE_SIZE * MMAP_PAGE_SIZE; // Round down to page size
+	total_pages = total_memory / MMAP_PAGE_SIZE;
+	g_assert(total_pages > 0);
+
+	// Assert that our math is correct and we allocated enough space for the page table
+	size_t real_page_table_size = (total_pages + 7) / 8; 
+	g_assert(real_page_table_size <= page_table_size);
 
 	// Mono trace is not initialized yet at this point.
 	//g_printf("Fake heap initialized with %zu bytes @ %p (%zu total pages, %zu MB page table size)", memory_size, (void*)heap_start, total_pages, page_table_size / 1024 / 1024);
