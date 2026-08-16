@@ -6151,6 +6151,10 @@ ves_icall_System_Environment_GetCommandLineArgs (MonoError *error)
 	return result;
 }
 
+#if defined(HOST_LIBNX)
+extern void mono_nx_exit (int result);
+#endif
+
 void
 ves_icall_System_Environment_Exit (int result)
 {
@@ -6160,6 +6164,11 @@ ves_icall_System_Environment_Exit (int result)
 		mono_thread_exit ();
 
 	mono_runtime_quit_internal ();
+	
+#if defined(HOST_LIBNX)
+	// We want to handle proper application shutdown
+	mono_nx_exit (result);
+#endif
 
 	/* we may need to do some cleanup here... */
 	exit (result);
